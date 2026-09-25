@@ -5,7 +5,6 @@
 <title>Tuition Management</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{--bg:#f5f8f8;--surface:#fff;--surface2:#f8fbfb;--text:#17332e;--muted:#718680;--line:#e4ecea;--primary:#0bb39f;--primary2:#087c6e;--nav:#073f35;--nav2:#0a5145;--danger:#d94c58;--warning:#d7962d;--info:#3b82d6;--purple:#7757d8;--shadow:0 10px 32px rgba(13,54,47,.08);--radius:16px}*{box-sizing:border-box}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}.hidden{display:none!important}button,input,select,textarea{font:inherit}button{cursor:pointer}.app{height:100vh;display:flex;overflow:hidden}.sidebar{width:258px;background:linear-gradient(180deg,var(--nav),#06372f 70%,#062e29);color:#dcebe8;display:flex;flex-direction:column;flex-shrink:0}.brand{height:78px;padding:15px 18px;display:flex;gap:12px;align-items:center;border-bottom:1px solid rgba(255,255,255,.09)}.brandmark{width:44px;height:44px;overflow:hidden;border-radius:12px;background:#fff;display:grid;place-items:center;color:var(--primary2);font-size:22px;font-weight:800}
 /* Tuition logo stays inside the brandmark area; it is never used as a page background. */
@@ -44,48 +43,18 @@ html::-webkit-scrollbar,body::-webkit-scrollbar,.content::-webkit-scrollbar,.nav
 </main></div>
 <div id="modalRoot"></div><div id="toastRoot"></div>
 <script>
-/* Supabase configuration */
-const SUPABASE_URL='https://ggdisczpiidvnxamtocd.supabase.co';
-const SUPABASE_KEY='sb_publishable_F9EjOuHO-C6J7v4MfgvPYA_7RfmZglE';
-const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+/* Code-controlled administrator account */
 const ADMIN_USERNAME='admin';
-const ADMIN_PASSWORD=''; // Admin now signs in through Supabase Auth.
-const SYNC_CHANNEL='dce_tuition_sync_v4';
-const KEY='dce_tuition_v4';
-let cloudSaveQueue=Promise.resolve(),cloudReady=false,cloudStatus='offline';
-function cloudConfigured(){return !!sb}
-async function cloudLoad(){
-  try{
-    const {data:{user}}=await sb.auth.getUser();
-    if(!user){cloudStatus='offline';return null}
-    const {data,error}=await sb.from('app_state').select('data').eq('id','main').maybeSingle();
-    if(error)throw error;
-    if(data?.data){cloudStatus='online';return data.data}
-  }catch(e){console.warn('Supabase load failed:',e)}
-  cloudStatus='offline';return null;
-}
-function cloudSave(){
-  if(!currentUser || currentUser.role!=='admin') return;
-  const snapshot=clone(db);
-  cloudSaveQueue=cloudSaveQueue.then(async()=>{
-    try{
-      const {data:{user}}=await sb.auth.getUser();
-      if(!user)return;
-      const {error}=await sb.from('app_state').upsert({id:'main',data:snapshot,updated_at:new Date().toISOString()});
-      if(error)throw error;
-      cloudStatus='online';
-    }catch(e){cloudStatus='offline';console.warn('Supabase save failed:',e)}
-  }).catch(()=>{});
-}
-async function initCloudSync(){
-  try{
-    const {data:{session}}=await sb.auth.getSession();
-    if(!session){cloudReady=true;return}
-    const remote=await cloudLoad();
-    if(remote){db={...db,...remote,settings:{...db.settings,...(remote.settings||{})}};localStorage.setItem(KEY,JSON.stringify(db));}
-  }catch(e){console.warn(e)}
-  cloudReady=true;
-}
+const ADMIN_PASSWORD='DCE@2026#Admin'; // Change administrator login here only
+const SYNC_CHANNEL='dce_tuition_sync_v3';
+const KEY='dce_tuition_v3';
+const CLOUD_SYNC={enabled:true,apiUrl:'https://script.google.com/macros/s/AKfycbwsWrt4LEeRSgZdCfVVrRN8lWnvIIKRtab9zf-6iGEpGAYN1lN4LtNxR9l4rDO5b9I/exec',timeout:15000};
+let cloudSaveQueue=Promise.resolve(),cloudReady=false,cloudStatus='local';
+function cloudConfigured(){return CLOUD_SYNC.enabled&&CLOUD_SYNC.apiUrl&&!CLOUD_SYNC.apiUrl.includes('https://script.google.com/macros/s/AKfycbwsWrt4LEeRSgZdCfVVrRN8lWnvIIKRtab9zf-6iGEpGAYN1lN4LtNxR9l4rDO5b9I/exec')}
+async function cloudRequest(url,options={}){const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),CLOUD_SYNC.timeout);try{const r=await fetch(url,{...options,signal:ctl.signal,cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}finally{clearTimeout(timer)}}
+async function cloudLoad(){if(!cloudConfigured()){cloudStatus='local';return null}try{const out=await cloudRequest(CLOUD_SYNC.apiUrl+'?action=get&_='+Date.now());if(out?.ok&&out.data){cloudStatus='online';return out.data}}catch(e){console.warn('Cloud load failed:',e)}cloudStatus='offline';return null}
+function cloudSave(){if(!cloudConfigured())return;const payload=JSON.stringify(db);cloudSaveQueue=cloudSaveQueue.then(async()=>{try{const out=await cloudRequest(CLOUD_SYNC.apiUrl,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'save',data:payload})});if(out?.ok)cloudStatus='online'}catch(e){cloudStatus='offline';console.warn('Cloud save failed:',e)}}).catch(()=>{})}
+async function initCloudSync(){if(!cloudConfigured()){cloudReady=true;return}const remote=await cloudLoad();if(remote){db=remote;localStorage.setItem(KEY,JSON.stringify(db))}else{cloudSave()}cloudReady=true}
 
 const defaults={
  settings:{name:'Data Click Education',session:'2026-27',currency:'₹',timezone:'Asia/Kolkata',logo:''},
@@ -111,60 +80,9 @@ function uid(prefix){return prefix+Date.now().toString(36).slice(-7).toUpperCase
 function money(n){return (db.settings.currency||'₹')+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:0})}
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
 function toast(msg){const r=document.getElementById('toastRoot');r.innerHTML='<div class="toast">'+esc(msg)+'</div>';setTimeout(()=>r.innerHTML='',2200)}
-async function login(){
-  const u=document.getElementById('loginUser').value.trim();
-  const p=document.getElementById('loginPass').value;
-  if(!u||!p){toast('Enter username/email and password');return}
-  /* Admin: Supabase Auth */
-  if(u.includes('@')){
-    try{
-      const {data,error}=await sb.auth.signInWithPassword({email:u,password:p});
-      if(error)throw error;
-      const authUser=data.user;
-      const {data:profile,error:profileError}=await sb.from('users').select('*').eq('id',authUser.id).maybeSingle();
-      if(profileError)throw profileError;
-      if(!profile || profile.role!=='admin' || profile.active===false){
-        await sb.auth.signOut();
-        toast('This account is not an administrator');
-        return;
-      }
-      const remote=await cloudLoad();
-      if(remote) db={...db,...remote,settings:{...db.settings,...(remote.settings||{})}};
-      currentUser={id:authUser.id,role:'admin',username:profile.username||u,name:profile.name||'Administrator',active:true};
-      sessionStorage.setItem('dce_user',authUser.id);
-      document.getElementById('loginView').classList.add('hidden');
-      document.getElementById('appView').classList.remove('hidden');
-      updateShell();buildNav();openPage('dashboard');
-      return;
-    }catch(e){console.warn(e);toast('Admin login failed: '+(e.message||'Invalid credentials'));return}
-  }
-  /* Student/Teacher: keep the existing local login until their Auth accounts are migrated. */
-  let user=db.users.find(x=>x.role!=='admin'&&(x.username===u||x.id===u)&&x.password===p&&x.active!==false)||null;
-  if(!user){const st=db.students.find(x=>(x.username||x.id)===u&&(x.password||'123456')===p&&x.status!=='left');if(st)user={id:st.id,role:'student',username:st.username||st.id,password:st.password||'123456',name:st.name,active:true}}
-  if(!user){const t=db.teachers.find(x=>(x.username||x.id)===u&&(x.password||'123456')===p&&x.active!==false);if(t)user={id:t.id,role:'teacher',username:t.username||t.id,password:t.password||'123456',name:t.name,active:true}}
-  if(!user){toast('Username or password is incorrect');return}
-  currentUser=user;sessionStorage.setItem('dce_user',user.id);document.getElementById('loginView').classList.add('hidden');document.getElementById('appView').classList.remove('hidden');updateShell();buildNav();openPage(user.role==='student'?'studentHome':'dashboard');
-}
-async function boot(){
-  try{
-    const {data:{session}}=await sb.auth.getSession();
-    if(session?.user){
-      const {data:profile}=await sb.from('users').select('*').eq('id',session.user.id).maybeSingle();
-      if(profile?.role==='admin' && profile.active!==false){
-        const remote=await cloudLoad();
-        if(remote) db={...db,...remote,settings:{...db.settings,...(remote.settings||{})}};
-        currentUser={id:session.user.id,role:'admin',username:profile.username||session.user.email,name:profile.name||'Administrator',active:true};
-        sessionStorage.setItem('dce_user',session.user.id);
-        document.getElementById('loginView').classList.add('hidden');document.getElementById('appView').classList.remove('hidden');
-        updateShell();buildNav();openPage('dashboard');return;
-      }
-    }
-  }catch(e){console.warn('Auth boot failed',e)}
-  /* Existing local student/teacher session fallback */
-  const sid=sessionStorage.getItem('dce_user');
-  if(sid){const u=resolveUser(sid);if(u&&u.active!==false){currentUser=u;document.getElementById('loginView').classList.add('hidden');document.getElementById('appView').classList.remove('hidden');updateShell();buildNav();openPage(u.role==='student'?'studentHome':'dashboard');return}}
-}
-async function logout(){try{await sb.auth.signOut()}catch(e){}sessionStorage.removeItem('dce_user');currentUser=null;location.reload()}
+function login(){const u=document.getElementById('loginUser').value.trim(),p=document.getElementById('loginPass').value;let user=null;if(u===ADMIN_USERNAME&&p===ADMIN_PASSWORD){user=resolveUser('ADM001');if(!db.users.some(x=>x.id==='ADM001')){db.users.unshift(user);save()}}else{user=db.users.find(x=>x.role!=='admin'&&(x.username===u||x.id===u)&&x.password===p&&x.active!==false)||null;if(!user){const s=db.students.find(x=>(x.username||x.id)===u&&(x.password||'123456')===p&&x.status!=='left');if(s)user={id:s.id,role:'student',username:s.username||s.id,password:s.password||'123456',name:s.name,active:true}}if(!user){const t=db.teachers.find(x=>(x.username||x.id)===u&&(x.password||'123456')===p&&x.active!==false);if(t)user={id:t.id,role:'teacher',username:t.username||t.id,password:t.password||'123456',name:t.name,active:true}}}if(!user){toast('Username or password is incorrect');return}currentUser=user;sessionStorage.setItem('dce_user',user.id);document.getElementById('loginView').classList.add('hidden');document.getElementById('appView').classList.remove('hidden');updateShell();buildNav();openPage(user.role==='student'?'studentHome':'dashboard')}
+function boot(){const sid=sessionStorage.getItem('dce_user');if(sid){const u=resolveUser(sid);if(u&&u.active!==false){currentUser=u;document.getElementById('loginView').classList.add('hidden');document.getElementById('appView').classList.remove('hidden');updateShell();buildNav();openPage(u.role==='student'?'studentHome':'dashboard');return}}}
+function logout(){sessionStorage.removeItem('dce_user');currentUser=null;location.reload()}
 function labelRole(r){return r==='admin'?'Administrator':r==='teacher'?'Teacher':'Student'}
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open')}
 function buildNav(){const role=currentUser.role;let groups=[];if(role==='student'){groups=[['MAIN',[['studentHome','⌂','Overview'],['myFees','₹','My Fees'],['myAttendance','✓','Attendance'],['myMarks','▤','Results'],['myNotices','●','Notices'],['materials','▤','Materials'],['messages','✉','Messages']]],['ACCOUNT',[['profile','◉','My Profile']]]]}else if(role==='teacher'){groups=[['MAIN',[['dashboard','◉','Dashboard'],['students','♙','Students'],['promotions','↗','Promotion / Old Student'],['batches','▦','Batches'],['attendance','✓','Attendance'],['marks','▤','Marks & Results'],['notices','●','Notices'],['materials','▤','Materials'],['messages','✉','Messages']]],['ACCOUNT',[['profile','◉','My Profile']]]]}else{groups=[['MAIN',[['dashboard','◉','Dashboard'],['students','♙','Students'],['promotions','↗','Promotion / Old Student'],['admissions','＋','Admissions'],['batches','▦','Batches']]],['FEES & FINANCE',[['payments','₹','Fee Collection'],['feeHistory','↕','Fee History'],['expenses','▤','Expenses'],['finance','◔','Finance']]],['ACADEMICS',[['attendance','✓','Attendance'],['marks','▤','Marks & Results']]],['COMMUNICATION',[['notices','●','Notices'],['communication','➤','Communication'],['messages','✉','Messages']]],['LEARNING',[['materials','▤','Materials']]],['DATA',[['excel','▣','Excel Data Center'],['recovery','↺','Recovery']]],['ADMINISTRATION',[['teachers','♙','Teachers'],['users','♢','Users & Access'],['activity','≋','Activity Log'],['settings','⚙','Settings']]]]}groups=groups.map(g=>[g[0],g[1].filter(x=>canView(x[0]))]).filter(g=>g[1].length);let h='';groups.forEach(g=>{h+='<div class="nav-title">'+g[0]+'</div>';g[1].forEach(x=>h+='<button class="'+(currentPage===x[0]?'active':'')+'" onclick="openPage(&quot;'+x[0]+'&quot;)"><span class="ico">'+x[1]+'</span>'+x[2]+'</button>')});document.getElementById('nav').innerHTML=h}
@@ -240,30 +158,9 @@ function viewsCommunication(){let students=db.students.filter(s=>s.status!=='lef
 function viewsMaterials(){let a=visibleMaterials().slice().reverse(),q=(window.materialSearch||'').toLowerCase();if(q)a=a.filter(m=>[m.title,m.fileName,m.audienceLabel].join(' ').toLowerCase().includes(q));let canUpload=currentUser.role==='admin'||currentUser.role==='teacher';return pageHead('Materials','Study materials and documents. ',canUpload?'<button class="btn primary" onclick="openMaterial()">＋ Upload Material</button>':'')+'<div class="card"><div class="card-body"><div class="filters"><div class="field grow"><label>Search</label><input value="'+esc(window.materialSearch||'')+'" placeholder="Search materials" oninput="livePageSearch(this,&quot;materialSearch&quot;)"></div></div></div></div><div class="grid two" style="margin-top:14px">'+(a.length?a.map(m=>'<div class="card"><div class="card-body material-card"><div class="material-icon">PDF</div><div style="flex:1"><b>'+esc(m.title)+'</b><small style="display:block;color:var(--muted);margin-top:3px">'+esc(m.fileName)+' · '+esc(m.date)+' · '+esc(m.audienceLabel||m.audience)+'</small><div class="actions" style="margin-top:12px"><button class="btn small primary" onclick="downloadMaterial(&quot;'+m.id+'&quot;)">Download</button>'+(canUpload?'<button class="btn small" onclick="deleteMaterial(&quot;'+m.id+'&quot;)">Delete</button>':'')+'</div></div></div></div>').join(''):'<div class="card"><div class="empty">No materials available</div></div>')+'</div>'}
 function openMaterial(){let students=db.students.filter(s=>s.status!=='left');modal('Upload Material','<div class="form-grid"><div class="field full"><label>Title</label><input id="matTitle" placeholder="e.g. Mathematics Chapter 1"></div><div class="field"><label>Visible To</label><select id="matAudience" onchange="toggleMaterialTarget()"><option value="all">All Students</option><option value="class">Class</option><option value="batch">Batch</option><option value="student">Specific Student</option><option value="teachers">Teachers</option></select></div><div class="field hidden" id="matTargetWrap"><label>Recipient</label><select id="matTarget"></select></div><div class="field full"><label>PDF / Document</label><input id="matFile" type="file" accept="application/pdf,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx"></div></div>','<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveMaterial()">Upload Material</button>');toggleMaterialTarget()}
 function toggleMaterialTarget(){let type=val('matAudience'),w=document.getElementById('matTargetWrap'),t=document.getElementById('matTarget');if(!w||!t)return;if(type==='class'){w.classList.remove('hidden');t.innerHTML=classOptions()}else if(type==='batch'){w.classList.remove('hidden');t.innerHTML=db.batches.map(b=>'<option>'+esc(b.name)+'</option>').join('')}else if(type==='student'){w.classList.remove('hidden');t.innerHTML=db.students.filter(s=>s.status!=='left').map(s=>'<option value="'+s.id+'">'+esc(s.name)+' — '+esc(s.id)+'</option>').join('')}else{w.classList.add('hidden');t.innerHTML=''}}
-async function saveMaterial(){
-  const f=document.getElementById('matFile')?.files?.[0];
-  if(!f){toast('Select a file');return}
-  if(f.size>50*1024*1024){toast('Maximum file size is 50 MB');return}
-  const type=val('matAudience'),target=val('matTarget');
-  const id=uid('MAT');
-  const safe=f.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-  const path=`${id}/${safe}`;
-  try{
-    let storedPath=path;
-    if(currentUser?.role==='admin'){
-      const {error:upErr}=await sb.storage.from('materials').upload(path,f,{upsert:false,contentType:f.type||'application/octet-stream'});
-      if(upErr)throw upErr;
-    }else{
-      /* Teacher upload is still local until teacher Auth is migrated. */
-      const reader=new FileReader();
-      reader.onload=()=>{};
-    }
-    db.materials.push({id,title:val('matTitle')||f.name,fileName:f.name,date:today(),audience:type,target,filePath:storedPath,fileType:f.type||'',fileSize:f.size,audienceLabel:type==='all'?'All Students':type==='class'?'Class: '+target:type==='batch'?'Batch: '+target:type==='student'?'Student: '+target:'Teachers',by:currentUser.name});
-    save();activity('Material uploaded',f.name);save();closeModal();render();toast('Material uploaded to Supabase');
-  }catch(e){console.error(e);toast('Upload failed: '+(e.message||'Unknown error'))}
-}
-async function downloadMaterial(id){let m=db.materials.find(x=>x.id===id);if(!m)return;if(m.filePath){try{const {data,error}=await sb.storage.from('materials').createSignedUrl(m.filePath,600);if(error)throw error;if(data?.signedUrl)window.open(data.signedUrl,'_blank','noopener');activity('Material opened',m.title);save()}catch(e){toast('Could not open this material')}}else if(m.data){let a=document.createElement('a');a.href=m.data;a.download=m.fileName||m.title;a.click();activity('Material downloaded',m.title);save()}}
-async function deleteMaterial(id){if(!confirm('Delete this material?'))return;let m=db.materials.find(x=>x.id===id);try{if(m?.filePath)await sb.storage.from('materials').remove([m.filePath]);db.materials=db.materials.filter(x=>x.id!==id);activity('Material deleted',m?.title||id);save();render();toast('Material deleted')}catch(e){toast('Could not delete material')}}
+function saveMaterial(){let f=document.getElementById('matFile')?.files?.[0];if(!f){toast('Select a file');return}if(f.size>4500000){toast('Please choose a smaller file');return}let r=new FileReader();r.onload=()=>{let type=val('matAudience'),target=val('matTarget');db.materials.push({id:uid('MAT'),title:val('matTitle')||f.name,fileName:f.name,date:today(),audience:type,target,data:r.result,audienceLabel:type==='all'?'All Students':type==='class'?'Class: '+target:type==='batch'?'Batch: '+target:type==='student'?'Student: '+target:'Teachers',by:currentUser.name});try{save();activity('Material uploaded',f.name);closeModal();render();toast('Material uploaded')}catch(e){toast('Could not save this file')}};r.readAsDataURL(f)}
+function downloadMaterial(id){let m=db.materials.find(x=>x.id===id);if(!m)return;let a=document.createElement('a');a.href=m.data;a.download=m.fileName||m.title;a.click();activity('Material downloaded',m.title);save()}
+function deleteMaterial(id){if(!confirm('Delete this material?'))return;let m=db.materials.find(x=>x.id===id);db.materials=db.materials.filter(x=>x.id!==id);activity('Material deleted',m?.title||id);save();render();toast('Material deleted')}
 
 function messageVisibleFor(m,role){
   if(role==='student') return !m.deletedStudent;
@@ -475,21 +372,8 @@ function livePageSearch(el,key){
   });
 }
 
-async function openMaterialFile(materialId){
-  const m=(db.materials||[]).find(x=>x.id===materialId);if(!m)return;
-  if(m.filePath){
-    try{
-      const {data,error}=await sb.storage.from('materials').createSignedUrl(m.filePath,60*10);
-      if(error)throw error;
-      if(data?.signedUrl)window.open(data.signedUrl,'_blank','noopener');
-    }catch(e){toast('Could not open this material')}
-    return;
-  }
-  if(m.data){const a=document.createElement('a');a.href=m.data;a.download=m.fileName||m.title||'material';a.click();}
-}
-
 applyBranding();
-(async()=>{await initCloudSync();applyBranding();await boot()})();
+(async()=>{await initCloudSync();applyBranding();boot()})();
 try{window.dceSyncChannel=new BroadcastChannel(SYNC_CHANNEL);window.dceSyncChannel.onmessage=()=>{db=loadDB();refreshSessionUser();if(currentUser){buildNav();render()}}}catch(e){}
 window.addEventListener('storage',e=>{if(e.key===KEY&&currentUser){db=loadDB();refreshSessionUser();buildNav();render()}});
 document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.pop').forEach(x=>{x.classList.add('hidden');});const sb=document.getElementById('sidebar'),mm=document.querySelector('.mobile-menu');if(window.innerWidth<=760&&sb?.classList.contains('open')&&!sb.contains(e.target)&&!mm?.contains(e.target))sb.classList.remove('open')});
